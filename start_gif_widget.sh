@@ -1,43 +1,43 @@
 #!/bin/bash
 # filepath: /home/kutay/Desktop/viusalcode/projeler/start_gif_widget.sh
-# GIF Widget Başlatma Scripti
+# GIF Widget Launcher Script
 
-# Script'in bulunduğu dizini al
+# Get script directory
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# xdotool kurulu mu kontrol et
+# Check if xdotool is installed
 if ! command -v xdotool &> /dev/null; then
-    echo "❌ xdotool kurulu değil!"
-    echo "📦 Kurmak için: sudo apt install xdotool"
+    echo "❌ xdotool is not installed!"
+    echo "📦 To install: sudo apt install xdotool"
     exit 1
 fi
 
-# Python3 kurulu mu kontrol et
+# Check if Python3 is installed
 if ! command -v python3 &> /dev/null; then
-    echo "❌ Python3 kurulu değil!"
-    echo "📦 Kurmak için: sudo apt install python3"
+    echo "❌ Python3 is not installed!"
+    echo "📦 To install: sudo apt install python3"
     exit 1
 fi
 
-# PIL (Pillow) kurulu mu kontrol et
+# Check if PIL (Pillow) is installed
 if ! python3 -c "import PIL" 2>/dev/null; then
-    echo "❌ PIL (Pillow) kurulu değil!"
-    echo "📦 Kurmak için: pip3 install Pillow"
+    echo "❌ PIL (Pillow) is not installed!"
+    echo "📦 To install: pip3 install Pillow"
     exit 1
 fi
 
-echo "🎭 GIF Widget başlatılıyor..."
-echo "📂 Dizin: $SCRIPT_DIR"
+echo "🎭 Starting GIF Widget..."
+echo "📂 Directory: $SCRIPT_DIR"
 
-# GIF Widget'ı başlat
+# Start GIF Widget
 cd "$SCRIPT_DIR"
 python3 gif_widget.py
 
-# Hata kontrolü
+# Error check
 if [ $? -ne 0 ]; then
-    echo "❌ GIF Widget başlatılamadı!"
-    echo "🔍 Hata detayları için: python3 gif_widget.py"
+    echo "❌ Failed to start GIF Widget!"
+    echo "🔍 For error details: python3 gif_widget.py"
     exit 1
 fi
 
-echo "✅ GIF Widget başarıyla kapatıldı."
+echo "✅ GIF Widget closed successfully."
