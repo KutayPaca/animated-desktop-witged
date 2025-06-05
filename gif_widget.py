@@ -40,9 +40,29 @@ class GifWidget:
         
         # Menu control variable
         self.menu_open = False
+        self.last_menu_position = (0, 0)  # Store last menu position
         
         # Hide when not on desktop control
         self.hide_when_not_desktop = True  # Default enabled
+        
+        # Border/Frame settings
+        self.border_enabled = False
+        self.border_style = "solid"  # solid, dotted, dashed, double, gradient
+        self.border_color = "#FF0000"  # Default red
+        self.border_width = 3
+        self.border_opacity = 1.0
+        
+        # Available border styles
+        self.border_styles = {
+            "None": {"enabled": False},
+            "Classic Red": {"enabled": True, "style": "solid", "color": "#FF0000", "width": 3},
+            "Neon Blue": {"enabled": True, "style": "solid", "color": "#00FFFF", "width": 2},
+            "Gold Frame": {"enabled": True, "style": "double", "color": "#FFD700", "width": 4},
+            "Green Glow": {"enabled": True, "style": "solid", "color": "#00FF00", "width": 2},
+            "Purple Magic": {"enabled": True, "style": "dashed", "color": "#8A2BE2", "width": 3},
+            "Rainbow": {"enabled": True, "style": "gradient", "color": "#FF0000", "width": 4}
+        }
+        self.current_border_name = "None"
         
         # Widget size
         self.widget_width = 150
@@ -66,7 +86,10 @@ class GifWidget:
         # Load configuration
         self.load_config()
         
-        # Desktop check thread
+        # Apply initial border
+        self.apply_border()
+        
+        # Desktop check thread - RE-ENABLED
         self.desktop_check_thread = threading.Thread(target=self.check_desktop_status, daemon=True)
         self.desktop_check_thread.start()
         
@@ -92,6 +115,12 @@ class GifWidget:
                     self.widget_height = config.get('height', 150)
                     self.animation_speed = config.get('speed', 100)
                     self.hide_when_not_desktop = config.get('hide_when_not_desktop', True)
+                    # Load border settings
+                    self.border_enabled = config.get('border_enabled', False)
+                    self.border_style = config.get('border_style', 'solid')
+                    self.border_color = config.get('border_color', '#FF0000')
+                    self.border_width = config.get('border_width', 3)
+                    self.current_border_name = config.get('current_border_name', 'None')
         except Exception as e:
             print(f"Config loading error: {e}")
     
@@ -105,7 +134,13 @@ class GifWidget:
                 'width': self.widget_width,
                 'height': self.widget_height,
                 'speed': self.animation_speed,
-                'hide_when_not_desktop': self.hide_when_not_desktop
+                'hide_when_not_desktop': self.hide_when_not_desktop,
+                # Save border settings
+                'border_enabled': self.border_enabled,
+                'border_style': self.border_style,
+                'border_color': self.border_color,
+                'border_width': self.border_width,
+                'current_border_name': self.current_border_name
             }
             with open(self.config_file, 'w') as f:
                 json.dump(config, f)
@@ -258,6 +293,7 @@ class GifWidget:
     def show_menu(self, event):
         """Show right-click menu"""
         self.menu_open = True  # Mark menu as open
+        self.last_menu_position = (event.x_root, event.y_root)  # Store menu position
         
         menu = tk.Menu(self.root, tearoff=0)
         menu.add_command(label="Select New GIF", command=self.select_gif)
@@ -275,6 +311,21 @@ class GifWidget:
         menu.add_command(label=hide_text, command=self.toggle_hide_mode)
         
         menu.add_separator()
+        
+        # Border/Frame submenu
+        border_menu = tk.Menu(menu, tearoff=0)
+        for style_name in self.border_styles.keys():
+            # Add checkmark if this is the current style
+            display_name = f"✓ {style_name}" if style_name == self.current_border_name else style_name
+            border_menu.add_command(
+                label=display_name, 
+                command=lambda name=style_name: self.set_border_style_and_refresh_menu(name)
+            )
+        
+        menu.add_cascade(label="Border Style", menu=border_menu)
+        menu.add_command(label="Next Border", command=self.cycle_border_style_and_refresh_menu)
+        
+        menu.add_separator()
         menu.add_command(label="Reset Position", command=self.reset_position_menu)
         menu.add_separator()
         menu.add_command(label="Exit", command=self.root.quit)
@@ -285,11 +336,11 @@ class GifWidget:
         
         try:
             menu.tk_popup(event.x_root, event.y_root)
-        except tk.TclError:
-            pass
+        except tk.TclError as e:
+            print(f"Menu popup error: {e}")
         finally:
             # Menü kapandıktan sonra flag'i sıfırla
-            self.root.after(500, on_menu_close)
+            self.root.after(200, on_menu_close)
     
     def toggle_animation(self):
         """Stop/start animation"""
@@ -307,9 +358,8 @@ class GifWidget:
             # Show info on widget instead of messagebox
             self.show_resize_info()
         else:
-            # Return to normal mode
-            self.label.config(highlightthickness=0)
-            self.root.configure(bg='black')
+            # Return to normal mode - restore original border instead of black
+            self.apply_border()  # This will restore the user's chosen border
             
             # If size changed, reload GIF and save settings
             if self.gif_path and os.path.exists(self.gif_path):
@@ -403,6 +453,16 @@ class GifWidget:
         """Check desktop status"""
         while True:
             try:
+                # Skip check if menu is open
+                if self.menu_open:
+                    time.sleep(0.5)
+                    continue
+                
+                # Skip check if hide mode is disabled
+                if not self.hide_when_not_desktop:
+                    time.sleep(0.5)
+                    continue
+                
                 # Check active window
                 result = subprocess.run(['xdotool', 'getactivewindow', 'getwindowname'], 
                                       capture_output=True, text=True)
@@ -426,9 +486,10 @@ class GifWidget:
                 self.root.after(0, self.toggle_visibility, is_on_desktop)
                 
             except Exception as e:
-                print(f"Desktop check error: {e}")
+                # Silent error handling to avoid spam
+                pass
             
-            time.sleep(0.5)  # Check every 0.5 seconds (more responsive)
+            time.sleep(0.5)  # Check every 0.5 seconds
     
     def toggle_visibility(self, show):
         """Toggle widget visibility"""
@@ -437,8 +498,11 @@ class GifWidget:
             if self.menu_open:
                 return
                 
-            # If hide when not on desktop is disabled, do nothing
+            # If hide when not on desktop is disabled, always show
             if not self.hide_when_not_desktop:
+                if not self.root.winfo_viewable():
+                    self.root.deiconify()
+                    self.root.attributes('-topmost', True)
                 return
                 
             if show:
@@ -450,7 +514,133 @@ class GifWidget:
                     self.root.withdraw()
         except Exception as e:
             print(f"Visibility toggle error: {e}")
+            # Hata durumunda widget'ı göster
+            try:
+                self.root.deiconify()
+                self.root.attributes('-topmost', True)
+            except:
+                pass
     
+    def apply_border(self):
+        """Apply the current border style to the widget"""
+        if not self.border_enabled:
+            # No border
+            self.label.config(highlightthickness=0, bd=0)
+            self.root.configure(bg='black')
+            return
+        
+        # Apply border based on style
+        if self.border_style == "solid":
+            self.label.config(
+                highlightbackground=self.border_color,
+                highlightcolor=self.border_color,
+                highlightthickness=self.border_width,
+                bd=0
+            )
+            self.root.configure(bg=self.border_color)
+        
+        elif self.border_style == "double":
+            # Create double border effect
+            self.label.config(
+                highlightbackground=self.border_color,
+                highlightcolor=self.border_color,
+                highlightthickness=self.border_width,
+                bd=self.border_width//2,
+                relief='raised'
+            )
+            self.root.configure(bg=self.border_color)
+        
+        elif self.border_style == "dashed":
+            # For dashed effect, use a different approach
+            self.label.config(
+                highlightbackground=self.border_color,
+                highlightcolor=self.border_color,
+                highlightthickness=self.border_width,
+                bd=1,
+                relief='ridge'
+            )
+            self.root.configure(bg=self.border_color)
+        
+        elif self.border_style == "gradient":
+            # Rainbow gradient effect
+            self.rainbow_border()
+        
+        else:
+            # Default solid
+            self.label.config(
+                highlightbackground=self.border_color,
+                highlightcolor=self.border_color,
+                highlightthickness=self.border_width,
+                bd=0
+            )
+            self.root.configure(bg=self.border_color)
+    
+    def rainbow_border(self):
+        """Create animated rainbow border effect"""
+        colors = ['#FF0000', '#FF7F00', '#FFFF00', '#00FF00', '#0000FF', '#4B0082', '#9400D3']
+        
+        def change_color():
+            if self.border_style == "gradient" and self.border_enabled:
+                import random
+                color = random.choice(colors)
+                self.label.config(
+                    highlightbackground=color,
+                    highlightcolor=color,
+                    highlightthickness=self.border_width
+                )
+                self.root.configure(bg=color)
+                # Change color every 500ms
+                self.root.after(500, change_color)
+        
+        change_color()
+    
+    def set_border_style(self, style_name):
+        """Set border style by name"""
+        if style_name in self.border_styles:
+            style_config = self.border_styles[style_name]
+            self.border_enabled = style_config["enabled"]
+            
+            if self.border_enabled:
+                self.border_style = style_config["style"]
+                self.border_color = style_config["color"]
+                self.border_width = style_config["width"]
+            
+            self.current_border_name = style_name
+            self.apply_border()
+            self.save_config()
+    
+    def cycle_border_style(self):
+        """Cycle through available border styles"""
+        styles = list(self.border_styles.keys())
+        current_index = styles.index(self.current_border_name)
+        next_index = (current_index + 1) % len(styles)
+        next_style = styles[next_index]
+        self.set_border_style(next_style)
+    
+    def set_border_style_and_refresh_menu(self, style_name):
+        """Set border style and refresh menu to keep it open"""
+        self.set_border_style(style_name)
+        # Refresh menu after a short delay
+        self.root.after(100, self.refresh_menu)
+    
+    def cycle_border_style_and_refresh_menu(self):
+        """Cycle through border styles and refresh menu to keep it open"""
+        self.cycle_border_style()
+        # Refresh menu after a short delay
+        self.root.after(100, self.refresh_menu)
+    
+    def refresh_menu(self):
+        """Refresh the menu at the last position"""
+        if hasattr(self, 'last_menu_position'):
+            # Create a fake event with the stored position
+            class FakeEvent:
+                def __init__(self, x_root, y_root):
+                    self.x_root = x_root
+                    self.y_root = y_root
+            
+            fake_event = FakeEvent(self.last_menu_position[0], self.last_menu_position[1])
+            self.show_menu(fake_event)
+
     def run(self):
         """Run the widget"""
         self.root.mainloop()
