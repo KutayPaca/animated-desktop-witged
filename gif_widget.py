@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 import tkinter as tk
 from tkinter import filedialog, messagebox
-from PIL import Image, ImageTk
+from PIL import Image, ImageTk, ImageGrab
 import subprocess
 import json
 import os
 import threading
 import time
+from collections import Counter
+import colorsys
 
 class GifWidget:
     def __init__(self):
@@ -64,6 +66,13 @@ class GifWidget:
         }
         self.current_border_name = "None"
         
+        # Wallpaper sync configuration
+        self.wallpaper_sync_enabled = False
+        self.last_wallpaper_analysis_pos = None
+        self.wallpaper_analysis_thread = None
+        self.wallpaper_update_interval = 2.0  # seconds
+        self.wallpaper_dominant_color = "#000000"
+        
         # Widget size
         self.widget_width = 150
         self.widget_height = 150
@@ -102,6 +111,10 @@ class GifWidget:
         # Set default position
         self.set_default_position()
         
+        # Start wallpaper sync if enabled
+        if self.wallpaper_sync_enabled:
+            self.start_wallpaper_sync_thread()
+        
     def load_config(self):
         """Load settings from configuration file"""
         try:
@@ -121,6 +134,9 @@ class GifWidget:
                     self.border_color = config.get('border_color', '#FF0000')
                     self.border_width = config.get('border_width', 3)
                     self.current_border_name = config.get('current_border_name', 'None')
+                    # Load wallpaper sync settings
+                    self.wallpaper_sync_enabled = config.get('wallpaper_sync_enabled', False)
+                    self.wallpaper_dominant_color = config.get('wallpaper_dominant_color', '#000000')
         except Exception as e:
             print(f"Config loading error: {e}")
     
@@ -140,7 +156,10 @@ class GifWidget:
                 'border_style': self.border_style,
                 'border_color': self.border_color,
                 'border_width': self.border_width,
-                'current_border_name': self.current_border_name
+                'current_border_name': self.current_border_name,
+                # Save wallpaper sync settings
+                'wallpaper_sync_enabled': self.wallpaper_sync_enabled,
+                'wallpaper_dominant_color': self.wallpaper_dominant_color
             }
             with open(self.config_file, 'w') as f:
                 json.dump(config, f)
@@ -281,6 +300,10 @@ class GifWidget:
         x = self.root.winfo_x() + event.x - self.start_x
         y = self.root.winfo_y() + event.y - self.start_y
         self.root.geometry(f"+{x}+{y}")
+        
+        # If wallpaper sync is enabled, trigger immediate analysis when dragging
+        if self.wallpaper_sync_enabled:
+            self.root.after(100, self.update_wallpaper_sync_border)
     
     def reset_position(self, event):
         """Double-click to return to default position"""
@@ -324,6 +347,10 @@ class GifWidget:
         
         menu.add_cascade(label="Border Style", menu=border_menu)
         menu.add_command(label="Next Border", command=self.cycle_border_style_and_refresh_menu)
+        
+        # Wallpaper sync option
+        wallpaper_sync_text = "✓ Wallpaper Sync Border" if self.wallpaper_sync_enabled else "Wallpaper Sync Border"
+        menu.add_command(label=wallpaper_sync_text, command=self.toggle_wallpaper_sync)
         
         menu.add_separator()
         menu.add_command(label="Reset Position", command=self.reset_position_menu)
@@ -640,6 +667,170 @@ class GifWidget:
             
             fake_event = FakeEvent(self.last_menu_position[0], self.last_menu_position[1])
             self.show_menu(fake_event)
+
+    def get_dominant_color_from_area(self, x, y, width, height):
+        """Get dominant color from a specific screen area"""
+        try:
+            # Take screenshot of the specific area
+            bbox = (x, y, x + width, y + height)
+            screenshot = ImageGrab.grab(bbox)
+            
+            # Resize for faster processing
+            screenshot = screenshot.resize((50, 50), Image.Resampling.LANCZOS if hasattr(Image, 'Resampling') else Image.LANCZOS)
+            
+            # Get pixel colors
+            pixels = list(screenshot.getdata())
+            
+            # Filter out very dark and very light colors (likely not wallpaper)
+            filtered_pixels = []
+            for pixel in pixels:
+                r, g, b = pixel[:3]
+                brightness = (r + g + b) / 3
+                if 30 < brightness < 225:  # Avoid pure black/white
+                    filtered_pixels.append(pixel)
+            
+            if not filtered_pixels:
+                filtered_pixels = pixels  # Fallback to all pixels
+            
+            # Get most common color
+            color_count = Counter(filtered_pixels)
+            most_common = color_count.most_common(5)  # Get top 5 colors
+            
+            # Calculate weighted average of top colors for smoother result
+            total_weight = sum(count for _, count in most_common)
+            weighted_r = sum(color[0] * count for color, count in most_common) / total_weight
+            weighted_g = sum(color[1] * count for color, count in most_common) / total_weight
+            weighted_b = sum(color[2] * count for color, count in most_common) / total_weight
+            
+            # Convert to hex
+            hex_color = "#{:02x}{:02x}{:02x}".format(int(weighted_r), int(weighted_g), int(weighted_b))
+            return hex_color
+            
+        except Exception as e:
+            print(f"Color analysis error: {e}")
+            return "#000000"  # Fallback to black
+    
+    def enhance_color_for_border(self, hex_color):
+        """Enhance color to make it more suitable for borders"""
+        try:
+            # Convert hex to RGB
+            r = int(hex_color[1:3], 16)
+            g = int(hex_color[3:5], 16)
+            b = int(hex_color[5:7], 16)
+            
+            # Convert to HSV for easier manipulation
+            h, s, v = colorsys.rgb_to_hsv(r/255.0, g/255.0, b/255.0)
+            
+            # Enhance saturation and ensure good visibility
+            s = min(1.0, s * 1.3)  # Increase saturation
+            v = max(0.4, min(0.9, v * 1.2))  # Ensure good brightness
+            
+            # Convert back to RGB
+            enhanced_r, enhanced_g, enhanced_b = colorsys.hsv_to_rgb(h, s, v)
+            
+            # Convert to hex
+            return "#{:02x}{:02x}{:02x}".format(
+                int(enhanced_r * 255),
+                int(enhanced_g * 255),
+                int(enhanced_b * 255)
+            )
+        except:
+            return hex_color  # Return original if enhancement fails
+    
+    def analyze_wallpaper_at_position(self):
+        """Analyze wallpaper color at current widget position"""
+        try:
+            # Get current widget position
+            widget_x = self.root.winfo_x()
+            widget_y = self.root.winfo_y()
+            
+            # Analyze area around the widget (slightly larger area for better sampling)
+            sample_width = self.widget_width + 40
+            sample_height = self.widget_height + 40
+            sample_x = max(0, widget_x - 20)
+            sample_y = max(0, widget_y - 20)
+            
+            # Get dominant color
+            dominant_color = self.get_dominant_color_from_area(sample_x, sample_y, sample_width, sample_height)
+            
+            # Enhance color for better border visibility
+            enhanced_color = self.enhance_color_for_border(dominant_color)
+            
+            return enhanced_color
+            
+        except Exception as e:
+            print(f"Wallpaper analysis error: {e}")
+            return "#000000"
+    
+    def update_wallpaper_sync_border(self):
+        """Update border color based on wallpaper analysis"""
+        if not self.wallpaper_sync_enabled:
+            return
+            
+        try:
+            # Get current position
+            current_pos = (self.root.winfo_x(), self.root.winfo_y())
+            
+            # Only analyze if position changed significantly or first time
+            if (self.last_wallpaper_analysis_pos is None or 
+                abs(current_pos[0] - self.last_wallpaper_analysis_pos[0]) > 20 or
+                abs(current_pos[1] - self.last_wallpaper_analysis_pos[1]) > 20):
+                
+                # Analyze wallpaper color
+                new_color = self.analyze_wallpaper_at_position()
+                
+                if new_color != self.wallpaper_dominant_color:
+                    self.wallpaper_dominant_color = new_color
+                    
+                    # Apply the new color as border
+                    self.border_enabled = True
+                    self.border_style = "solid"
+                    self.border_color = new_color
+                    self.border_width = 3
+                    self.current_border_name = "Wallpaper Sync"
+                    
+                    self.apply_border()
+                    self.save_config()
+                
+                self.last_wallpaper_analysis_pos = current_pos
+                
+        except Exception as e:
+            print(f"Wallpaper sync update error: {e}")
+    
+    def start_wallpaper_sync_thread(self):
+        """Start wallpaper sync monitoring thread"""
+        if self.wallpaper_analysis_thread and self.wallpaper_analysis_thread.is_alive():
+            return
+            
+        def wallpaper_sync_loop():
+            while self.wallpaper_sync_enabled:
+                try:
+                    self.root.after(0, self.update_wallpaper_sync_border)
+                    time.sleep(self.wallpaper_update_interval)
+                except Exception as e:
+                    print(f"Wallpaper sync thread error: {e}")
+                    time.sleep(1)
+        
+        self.wallpaper_analysis_thread = threading.Thread(target=wallpaper_sync_loop, daemon=True)
+        self.wallpaper_analysis_thread.start()
+    
+    def toggle_wallpaper_sync(self):
+        """Toggle wallpaper sync mode on/off"""
+        self.wallpaper_sync_enabled = not self.wallpaper_sync_enabled
+        
+        if self.wallpaper_sync_enabled:
+            # Start wallpaper sync
+            self.start_wallpaper_sync_thread()
+            # Immediate analysis
+            self.update_wallpaper_sync_border()
+        else:
+            # Return to previous border style
+            if self.current_border_name == "Wallpaper Sync":
+                self.current_border_name = "None"
+                self.border_enabled = False
+                self.apply_border()
+        
+        self.save_config()
 
     def run(self):
         """Run the widget"""
